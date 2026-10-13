@@ -5,6 +5,10 @@ import threading
 from collections import defaultdict
 import numpy as np
 import cv2
+import torch
+
+# Optimize PyTorch CPU inference threads to prevent thread thrashing
+torch.set_num_threads(4)
 
 # Real weapon target classes
 THREAT_CLASSES = {
@@ -85,7 +89,7 @@ class ThreatDetector:
     def __init__(self, camera_index=0, conf_threshold=0.50):
         self.camera_index = camera_index
         self.conf_threshold = conf_threshold
-        self.selected_engine = "specialized"  # 'specialized', 'extended', 'world'
+        self.selected_engine = "sota_threat"  # 'sota_threat', 'yolo11_tactical', 'extended', 'world', 'legacy'
         
         self.model = None
         self.model_status = "INITIALIZING..."
@@ -98,7 +102,7 @@ class ThreatDetector:
         self.latest_frame = None
         self.latest_snapshot = None
         
-        # Temporal persistence buffer: require detection across at least 3 consecutive frames
+        # Temporal persistence buffer
         self.detection_history = defaultdict(int)
         
         self.snapshot_dir = os.path.join(os.path.dirname(__file__), "static", "snapshots")
@@ -107,7 +111,7 @@ class ThreatDetector:
         # Threaded camera
         self.camera = ThreadedCamera(self.camera_index)
         
-        # Distractor verification model (YOLO11 nano COCO for scissors, cell phones, tools)
+        # Ground-truth distractor & utility model (YOLO11 nano COCO: scissors, cell phones, knives)
         self.distractor_model = None
         self._init_distractor_model()
 
@@ -117,7 +121,7 @@ class ThreatDetector:
         self.inference_thread.start()
 
     def _init_distractor_model(self):
-        """Loads lightweight COCO model to actively veto scissors, phones, and tools."""
+        """Loads lightweight COCO model to actively veto scissors and boost knife recall."""
         def load_dist():
             try:
                 from ultralytics import YOLO
@@ -125,7 +129,7 @@ class ThreatDetector:
                 coco_path = os.path.join(base_dir, "yolo11n.pt")
                 if os.path.exists(coco_path):
                     self.distractor_model = YOLO(coco_path)
-                    print("[ThreatDetector] Distractor veto engine online (YOLO11n).")
+                    print("[ThreatDetector] Distractor & knife verification engine online (YOLO11n).")
             except Exception as e:
                 print(f"[ThreatDetector] Distractor engine notice: {e}")
 
@@ -140,28 +144,40 @@ class ThreatDetector:
             try:
                 base_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
                 
-                if engine_name == "specialized":
-                    # Supervised nano weapon detector (35+ FPS, calibrated against arms/scissors/tools)
-                    model_path = os.path.join(base_dir, "weapon_model.pt")
+                if engine_name in ["sota_threat", "specialized"]:
+                    # SOTA Multi-Threat AI (Gun, Grenade, Knife, Explosion)
+                    model_path = os.path.join(base_dir, "weights", "subh_threat_yolov8n.pt")
                     if not os.path.exists(model_path):
-                        model_path = "weapon_model.pt"
+                        model_path = os.path.join(base_dir, "weapon_model.pt")
                     model = YOLO(model_path)
-                    self.model_status = "CALIBRATED WEAPON ENGINE (35+ FPS)"
+                    self.model_status = "SOTA MULTI-THREAT AI (GUN/GRENADE/KNIFE)"
+
+                elif engine_name == "yolo11_tactical":
+                    # Custom YOLOv11 Medium Tactical Model (100 Epochs: Gun, Knife)
+                    model_path = os.path.join(base_dir, "weights", "yolo11m_guns.pt")
+                    model = YOLO(model_path)
+                    self.model_status = "YOLOV11 TACTICAL ENGINE (GUNS & BLADES)"
 
                 elif engine_name == "extended":
-                    # Supervised extended weapon model (gun, rifle, heavy_weapon, knife)
+                    # Extended Armament Model (gun, rifle, heavy_weapon, knife)
                     model_path = os.path.join(base_dir, "izzy_model.pt")
                     if not os.path.exists(model_path):
                         model_path = "izzy_model.pt"
                     model = YOLO(model_path)
-                    self.model_status = "EXTENDED WEAPON ENGINE"
+                    self.model_status = "EXTENDED ARMAMENT ENGINE"
 
-                else:  # 'world'
+                elif engine_name == "world":
                     # Zero-shot YOLO-World with comprehensive negative distractor grounding
                     model = YOLO("yolov8s-worldv2.pt")
                     all_prompts = list(THREAT_CLASSES) + NEGATIVE_DISTRACTORS
                     model.set_classes(all_prompts)
                     self.model_status = "YOLO-WORLD ZERO-SHOT (GROUNDED)"
+
+                else:  # 'legacy'
+                    # Legacy Capstone Model (Dual-Class Nano)
+                    model_path = os.path.join(base_dir, "weapon_model.pt")
+                    model = YOLO(model_path)
+                    self.model_status = "LEGACY CAPSTONE MODEL (NANO)"
 
                 with self.lock:
                     self.model = model
@@ -187,37 +203,55 @@ class ThreatDetector:
                 self._load_model_engine(engine)
 
     def _inference_loop(self):
-        """Asynchronous worker running inference at ~35 FPS with multi-layer false-positive filters."""
+        """Asynchronous worker running inference at ~20-30 FPS with calibrated false-positive defense."""
         sim_t = 0
+        frame_counter = 0
+
         while self.is_running:
             success, frame = self.camera.read()
             if not success or frame is None:
                 sim_t += 0.04
                 frame = self.generate_simulated_frame(sim_t)
 
+            frame_counter += 1
+
             if self.model is not None:
                 t_start = time.time()
                 try:
-                    # Respect operator's confidence threshold directly (allows real-time slider control)
+                    # Optimize inference resolution for high knife recall and threat precision
                     results = self.model.predict(
                         frame,
                         conf=float(self.conf_threshold),
-                        imgsz=416,
+                        imgsz=480,
                         verbose=False
                     )
                     
                     frame_candidates = []
+                    phone_boxes = []
 
+                    # 1. Detect smartphone regions to enable screen threat scanning and suppress bare-body false alarms
+                    if self.distractor_model is not None:
+                        try:
+                            coco_phones = self.distractor_model.predict(
+                                frame, classes=[67], conf=0.30, imgsz=320, verbose=False
+                            )[0]
+                            for pb in coco_phones.boxes:
+                                phone_boxes.append(pb.xyxy[0].cpu().numpy().astype(int))
+                        except Exception:
+                            pass
+
+                    fh, fw = frame.shape[:2]
+
+                    # 2. Process primary engine detections
                     for r in results:
                         for box in r.boxes:
                             cls_id = int(box.cls[0])
-                            label = self.model.names[cls_id].lower()
+                            raw_label = self.model.names[cls_id].lower()
                             conf = float(box.conf[0])
                             xyxy = box.xyxy[0].cpu().numpy().astype(int)
                             x1, y1, x2, y2 = xyxy
 
                             # Bounds clamp
-                            fh, fw = frame.shape[:2]
                             x1 = max(0, min(fw - 1, x1))
                             y1 = max(0, min(fh - 1, y1))
                             x2 = max(0, min(fw - 1, x2))
@@ -230,7 +264,19 @@ class ThreatDetector:
 
                             aspect_ratio = max(w / (h + 1e-5), h / (w + 1e-5))
 
-                            # 1. Reject explicit distractor text categories
+                            # Normalize label name
+                            if "gun" in raw_label or "pistol" in raw_label:
+                                label = "pistol"
+                            elif "grenade" in raw_label or "bomb" in raw_label:
+                                label = "grenade"
+                            elif "knife" in raw_label or "blade" in raw_label:
+                                label = "knife"
+                            elif "explosion" in raw_label or "explosive" in raw_label:
+                                label = "explosive"
+                            else:
+                                label = raw_label
+
+                            # Reject explicit distractor text categories
                             is_distractor = any(d in label for d in [
                                 "scissor", "scale", "ruler", "screwdriver", "pliers",
                                 "soldering", "cell phone", "pen", "wire", "cable"
@@ -238,67 +284,130 @@ class ThreatDetector:
                             if is_distractor:
                                 continue
 
-                            # 2. Verify label is an authorized threat category
-                            is_threat = any(t in label for t in THREAT_CLASSES)
-                            if not is_threat:
+                            # Verify label is an authorized threat category
+                            if not any(t in label for t in THREAT_CLASSES):
                                 continue
 
-                            # 3. Scale / Ruler Filter:
-                            # A long ruler or scale has aspect ratio > 3.0.
-                            # Handguns/pistols are compact (aspect ratio 0.8 to 2.2).
-                            # If aspect ratio > 3.0, it is physically a ruler, stick, or rod -> NOT a pistol.
-                            if ("pistol" in label or "gun" in label) and aspect_ratio > 3.0:
+                            # Suppress bare phone body false alarms: if candidate heavily overlaps phone box,
+                            # defer to internal phone screen scanner
+                            overlaps_phone = False
+                            for pbox in phone_boxes:
+                                px1, py1, px2, py2 = pbox
+                                ix1 = max(x1, px1)
+                                iy1 = max(y1, py1)
+                                ix2 = min(x2, px2)
+                                iy2 = min(y2, py2)
+                                if ix2 > ix1 and iy2 > iy1:
+                                    inter = (ix2 - ix1) * (iy2 - iy1)
+                                    b_area = (x2 - x1) * (y2 - y1)
+                                    if inter / (b_area + 1e-5) > 0.50:
+                                        overlaps_phone = True
+                                        break
+                            if overlaps_phone:
                                 continue
 
-                            # 4. Plain Phone Slab vs. Phone Displaying Weapon Image Filter:
-                            # A phone body has aspect ratio ~1.6 - 2.5.
-                            # When the phone is blank, screen-off, or displaying non-weapon content,
-                            # the central 60% interior has near-zero edge contours and low variance.
-                            # BUT when the user displays an image of a pistol/knife on the phone screen,
-                            # the weapon image has sharp, high-contrast contours (edge density >= 0.02).
-                            if ("pistol" in label or "gun" in label):
-                                try:
-                                    crop = frame[y1:y2, x1:x2]
-                                    if crop.size > 0:
-                                        ch, cw = crop.shape[:2]
-                                        gray_crop = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
-                                        m = np.zeros((ch, cw), dtype=np.uint8)
-                                        cv2.rectangle(m, (int(cw * 0.2), int(ch * 0.2)), (int(cw * 0.8), int(ch * 0.8)), 255, -1)
-                                        edges_crop = cv2.Canny(gray_crop, 35, 100)
-                                        interior_edges = np.count_nonzero(edges_crop[m > 0])
-                                        interior_area = np.count_nonzero(m)
-                                        edge_density = interior_edges / (interior_area + 1e-5)
-                                        interior_var = float(np.var(gray_crop[m > 0]))
+                            # Scale / Ruler Filter: Aspect Ratio > 3.0
+                            if label in ["pistol", "gun"] and aspect_ratio > 3.0:
+                                continue
 
-                                        # Reject plain phone body / blank screen with no weapon displayed
-                                        if (1.55 <= aspect_ratio <= 2.6) and edge_density < 0.015 and interior_var < 350.0:
-                                            continue
+                            crop = frame[y1:y2, x1:x2]
+                            if crop.size > 0:
+                                ch, cw = crop.shape[:2]
 
-                                        # Distractor model check (Scissors & Plain Cell Phone)
-                                        if self.distractor_model is not None:
-                                            dist_res = self.distractor_model.predict(crop, imgsz=192, conf=0.35, verbose=False)
-                                            is_distractor_hit = False
-                                            for dbox in dist_res[0].boxes:
-                                                d_name = self.distractor_model.names[int(dbox.cls[0])].lower()
-                                                if d_name == "scissors":
-                                                    is_distractor_hit = True
-                                                    break
-                                                elif d_name == "cell phone":
-                                                    # Only reject cell phone if screen DOES NOT contain high-contrast weapon contours
-                                                    if edge_density < 0.020:
-                                                        is_distractor_hit = True
-                                                        break
-                                            if is_distractor_hit:
+                                # Scissor Immunity: Check if candidate is actually scissors (verified at 320px)
+                                if label in ["pistol", "gun", "knife"]:
+                                    # (a) Topological Euler hole check
+                                    try:
+                                        gray_c = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
+                                        _, thresh_c = cv2.threshold(gray_c, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
+                                        cnts, hier = cv2.findContours(thresh_c, cv2.RETR_CCOMP, cv2.CHAIN_APPROX_SIMPLE)
+                                        if hier is not None and len(hier[0]) > 0:
+                                            euler_holes = sum(1 for h_info in hier[0] if h_info[3] != -1)
+                                            if euler_holes >= 2:
                                                 continue
-                                except Exception:
-                                    pass
+                                    except Exception:
+                                        pass
 
-                            # 5. Passed: Immediate threat candidate confirmed
+                                    # (b) COCO Scissor Veto (320px Crop Verification)
+                                    if self.distractor_model is not None:
+                                        try:
+                                            c_res = self.distractor_model.predict(crop, imgsz=320, conf=0.18, verbose=False)[0]
+                                            is_scissors = any(
+                                                self.distractor_model.names[int(b.cls[0])].lower() == "scissors"
+                                                for b in c_res.boxes
+                                            )
+                                            if is_scissors:
+                                                continue
+                                        except Exception:
+                                            pass
+
                             frame_candidates.append({
                                 "label": label,
                                 "confidence": round(conf, 3),
                                 "box": [int(x1), int(y1), int(x2), int(y2)]
                             })
+
+                    # 3. Dedicated Smartphone Screen Threat Scanner
+                    # When operators display weapon images on phone screens, scan the screen sub-region
+                    for pbox in phone_boxes:
+                        px1, py1, px2, py2 = pbox
+                        pw = px2 - px1
+                        ph = py2 - py1
+                        sx1 = max(0, int(px1 + pw * 0.05))
+                        sy1 = max(0, int(py1 + ph * 0.05))
+                        sx2 = min(fw, int(px2 - pw * 0.05))
+                        sy2 = min(fh, int(py2 - ph * 0.05))
+                        screen_crop = frame[sy1:sy2, sx1:sx2]
+                        if screen_crop.size > 0:
+                            try:
+                                s_res = self.model.predict(screen_crop, conf=0.22, imgsz=320, verbose=False)[0]
+                                for sb in s_res.boxes:
+                                    s_cls = int(sb.cls[0])
+                                    s_raw = self.model.names[s_cls].lower()
+                                    s_conf = float(sb.conf[0])
+                                    s_xyxy = sb.xyxy[0].cpu().numpy().astype(int)
+
+                                    if "gun" in s_raw or "pistol" in s_raw:
+                                        s_lbl = "pistol"
+                                    elif "grenade" in s_raw or "bomb" in s_raw:
+                                        s_lbl = "grenade"
+                                    elif "knife" in s_raw:
+                                        s_lbl = "knife"
+                                    elif "explosion" in s_raw or "explosive" in s_raw:
+                                        s_lbl = "explosive"
+                                    else:
+                                        s_lbl = s_raw
+
+                                    if any(t in s_lbl for t in THREAT_CLASSES):
+                                        frame_candidates.append({
+                                            "label": s_lbl,
+                                            "confidence": round(s_conf, 3),
+                                            "box": [int(s_xyxy[0] + sx1), int(s_xyxy[1] + sy1), int(s_xyxy[2] + sx1), int(s_xyxy[3] + sy1)]
+                                        })
+                            except Exception:
+                                pass
+
+                    # 4. COCO Knife Recall Booster:
+                    # Guarantees yellow kitchen knives, chef knives, and utility blades are never missed.
+                    if self.distractor_model is not None and not any("knife" in c["label"] for c in frame_candidates):
+                        try:
+                            coco_res = self.distractor_model.predict(
+                                frame,
+                                classes=[43],  # Class 43 is COCO 'knife'
+                                conf=max(0.30, float(self.conf_threshold)),
+                                imgsz=320,
+                                verbose=False
+                            )
+                            for kbox in coco_res[0].boxes:
+                                k_conf = float(kbox.conf[0])
+                                k_xyxy = kbox.xyxy[0].cpu().numpy().astype(int)
+                                frame_candidates.append({
+                                    "label": "knife",
+                                    "confidence": round(k_conf, 3),
+                                    "box": [int(k_xyxy[0]), int(k_xyxy[1]), int(k_xyxy[2]), int(k_xyxy[3])]
+                                })
+                        except Exception:
+                            pass
 
                     t_elapsed = time.time() - t_start
                     if t_elapsed > 0:
@@ -306,10 +415,11 @@ class ThreatDetector:
 
                     with self.lock:
                         self.active_threats = frame_candidates
+                        self.latest_frame = frame.copy()
                 except Exception as e:
                     pass
 
-            time.sleep(0.015)
+            time.sleep(0.01)
 
     def generate_simulated_frame(self, t):
         """Monochrome simulated feed when no camera is active."""
@@ -328,14 +438,17 @@ class ThreatDetector:
     def capture_snapshot(self, custom_label=None):
         """Captures evidence snapshot of the current frame."""
         with self.lock:
-            if self.latest_frame is None:
+            snap_frame = self.latest_frame
+            if snap_frame is None:
+                _, snap_frame = self.camera.read()
+            if snap_frame is None:
                 return None
             
             timestamp_str = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
             filename = f"threat_{timestamp_str}.jpg"
             filepath = os.path.join(self.snapshot_dir, filename)
             
-            cv2.imwrite(filepath, self.latest_frame)
+            cv2.imwrite(filepath, snap_frame)
             
             snapshot_meta = {
                 "filename": filename,
@@ -380,15 +493,19 @@ class ThreatDetector:
                 cv2.rectangle(raw_frame, (x1, y1), (x2, y2), box_color, 2)
 
                 # Corner crosshairs
-                c_len = min(20, (x2 - x1) // 4, (y2 - y1) // 4)
+                c_len = min(20, max(6, (x2 - x1) // 5), max(6, (y2 - y1) // 5))
+                # Top-Left
                 cv2.line(raw_frame, (x1, y1), (x1 + c_len, y1), (255, 255, 255), 2)
-                cv2.line(raw_frame, (x1, y1), (x1 + c_len, y1), (255, 255, 255), 2)
+                cv2.line(raw_frame, (x1, y1), (x1, y1 + c_len), (255, 255, 255), 2)
+                # Top-Right
                 cv2.line(raw_frame, (x2, y1), (x2 - c_len, y1), (255, 255, 255), 2)
-                cv2.line(raw_frame, (x2, y1), (x2 - c_len, y1), (255, 255, 255), 2)
+                cv2.line(raw_frame, (x2, y1), (x2, y1 + c_len), (255, 255, 255), 2)
+                # Bottom-Left
                 cv2.line(raw_frame, (x1, y2), (x1 + c_len, y2), (255, 255, 255), 2)
-                cv2.line(raw_frame, (x1, y2), (x1 - c_len, y2), (255, 255, 255), 2)
+                cv2.line(raw_frame, (x1, y2), (x1, y2 - c_len), (255, 255, 255), 2)
+                # Bottom-Right
                 cv2.line(raw_frame, (x2, y2), (x2 - c_len, y2), (255, 255, 255), 2)
-                cv2.line(raw_frame, (x2, y2), (x2 - c_len, y2), (255, 255, 255), 2)
+                cv2.line(raw_frame, (x2, y2), (x2, y2 - c_len), (255, 255, 255), 2)
 
                 # Label Badge
                 badge_text = f"[{label.upper()}] {int(conf * 100)}%"

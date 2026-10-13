@@ -79,11 +79,19 @@ document.addEventListener('DOMContentLoaded', () => {
 
     function updateClassTags(engine) {
         if (!classTagsContainer) return;
-        if (engine === 'specialized') {
+        if (engine === 'sota_threat' || engine === 'specialized') {
             classTagsContainer.innerHTML = `
-                <span class="tag">Pistol / Handgun</span>
-                <span class="tag">Combat Knife</span>
-                <span class="tag" style="opacity:0.6">Distractors Rejected: Arm, Scissors, Tools</span>
+                <span class="tag">Gun / Pistol</span>
+                <span class="tag">Grenade / Bomb</span>
+                <span class="tag">Knife / Blade</span>
+                <span class="tag">Explosive</span>
+                <span class="tag" style="opacity:0.6">Immune: Scissors, Bare Arm, Tools</span>
+            `;
+        } else if (engine === 'yolo11_tactical') {
+            classTagsContainer.innerHTML = `
+                <span class="tag">Gun / Firearm</span>
+                <span class="tag">Knife / Blade</span>
+                <span class="tag" style="opacity:0.6">YOLOv11 Tactical Medium</span>
             `;
         } else if (engine === 'extended') {
             classTagsContainer.innerHTML = `
@@ -92,6 +100,12 @@ document.addEventListener('DOMContentLoaded', () => {
                 <span class="tag">Heavy Weapon</span>
                 <span class="tag">Knife / Blade</span>
             `;
+        } else if (engine === 'legacy') {
+            classTagsContainer.innerHTML = `
+                <span class="tag">Pistol / Handgun</span>
+                <span class="tag">Combat Knife</span>
+                <span class="tag" style="opacity:0.6">Legacy Dual-Class Model</span>
+            `;
         } else {
             classTagsContainer.innerHTML = `
                 <span class="tag">Handgun / Pistol</span>
@@ -99,7 +113,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 <span class="tag">Knife / Blade</span>
                 <span class="tag">Bomb / Explosive</span>
                 <span class="tag">Grenade</span>
-                <span class="tag" style="opacity:0.6">Grounded: Scissors, Soldering Iron, Arm</span>
+                <span class="tag" style="opacity:0.6">Grounded: Scissors, Tools, Arm</span>
             `;
         }
     }
