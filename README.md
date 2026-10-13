@@ -2,6 +2,8 @@
 
 A high-performance automated computer vision surveillance system designed for real-time weapon and threat detection across optical feeds and security streams. The system couples multi-scale convolutional and vision transformer architectures with a minimal, low-latency monochrome operator console.
 
+Originally researched and developed by Aryan Hardik Dani, Swayamprakash Patro, Sobaan M. Jagirdaar, and Prakhar Jaiswal at MIT World Peace University, and enhanced by Parth Doshi with real-time edge streaming, multi-threat vision backbones, smartphone screen threat inspection, and invariant false-positive suppression.
+
 ---
 
 ## Overview
@@ -132,6 +134,27 @@ Threat_Detection_System/
 |-- requirements.txt                 # Python project dependencies
 `-- README.md                        # Project documentation
 ```
+
+---
+
+## Authors & Contributors
+
+- **Parth Doshi**
+  - Email: parthdoshi404@gmail.com
+  - Website: [parthdoshi.me](https://www.parthdoshi.me)
+
+- **Aryan Hardik Dani**
+  - Email: 1032220083@mitwpu.edu.in
+  - LinkedIn: [Aryan Dani](https://linkedin.com/in/aryandani/)
+
+- **Swayamprakash Patro**
+- **Sobaan M. Jagirdaar**
+- **Prakhar Jaiswal**
+
+### Institution & Acknowledgments
+
+- **Institution**: [MIT World Peace University](https://mitwpu.edu.in)
+- **Acknowledgments**: We thank Dr. Vishwanath Karad MIT World Peace University for supporting the baseline research, and the open-source community for computer vision architectures and tooling.
 
 ---
 
