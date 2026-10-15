@@ -1,4 +1,5 @@
 import os
+import sys
 import time
 import datetime
 import threading
@@ -41,16 +42,38 @@ class ThreadedCamera:
     def _init_cap(self):
         if self.cap is not None:
             self.cap.release()
+            self.cap = None
         try:
-            self.cap = cv2.VideoCapture(self.camera_index, cv2.CAP_DSHOW)
-            self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
-            self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
-            self.cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
-            if not self.cap.isOpened():
+            backend_name = "default"
+            # Platform-specific backend selection with automatic fallback
+            if sys.platform.startswith("win"):
+                self.cap = cv2.VideoCapture(self.camera_index, cv2.CAP_DSHOW)
+                backend_name = "DirectShow"
+            elif sys.platform == "darwin":
+                self.cap = cv2.VideoCapture(self.camera_index, cv2.CAP_AVFOUNDATION)
+                backend_name = "AVFoundation"
+            elif sys.platform.startswith("linux"):
+                self.cap = cv2.VideoCapture(self.camera_index, cv2.CAP_V4L2)
+                backend_name = "V4L2"
+            else:
+                self.cap = cv2.VideoCapture(self.camera_index)
+                backend_name = "default"
+
+            # If platform-specific backend failed to open, try default backend
+            if self.cap is None or not self.cap.isOpened():
+                if self.cap is not None:
+                    self.cap.release()
+                self.cap = cv2.VideoCapture(self.camera_index)
+                backend_name = "default"
+
+            if self.cap is not None and self.cap.isOpened():
+                self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
+                self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
+                self.cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+                print(f"[ThreadedCamera] Camera {self.camera_index} online via {backend_name}.")
+            else:
                 print(f"[ThreadedCamera] Camera {self.camera_index} not opened. Falling back to simulation.")
                 self.cap = None
-            else:
-                print(f"[ThreadedCamera] Camera {self.camera_index} online via DirectShow.")
         except Exception as e:
             print(f"[ThreadedCamera] Capture error: {e}")
             self.cap = None
@@ -125,11 +148,8 @@ class ThreatDetector:
         def load_dist():
             try:
                 from ultralytics import YOLO
-                base_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
-                coco_path = os.path.join(base_dir, "yolo11n.pt")
-                if os.path.exists(coco_path):
-                    self.distractor_model = YOLO(coco_path)
-                    print("[ThreatDetector] Distractor & knife verification engine online (YOLO11n).")
+                self.distractor_model = YOLO("yolo11n.pt")
+                print("[ThreatDetector] Distractor & knife verification engine online (YOLO11n).")
             except Exception as e:
                 print(f"[ThreatDetector] Distractor engine notice: {e}")
 
@@ -137,56 +157,91 @@ class ThreatDetector:
         t.start()
 
     def _load_model_engine(self, engine_name):
-        """Loads and switches model engine."""
+        """Loads and switches model engine with automatic zero-shot fallback."""
         def load():
             from ultralytics import YOLO
             self.model_status = f"LOADING {engine_name.upper()}..."
             try:
                 base_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
-                
+                model = None
+                status = ""
+
                 if engine_name in ["sota_threat", "specialized"]:
-                    # SOTA Multi-Threat AI (Gun, Grenade, Knife, Explosion)
                     model_path = os.path.join(base_dir, "weights", "subh_threat_yolov8n.pt")
                     if not os.path.exists(model_path):
                         model_path = os.path.join(base_dir, "weapon_model.pt")
-                    model = YOLO(model_path)
-                    self.model_status = "SOTA MULTI-THREAT AI (GUN/GRENADE/KNIFE)"
+                    if os.path.exists(model_path):
+                        model = YOLO(model_path)
+                        status = "SOTA MULTI-THREAT AI (GUN/GRENADE/KNIFE)"
+                    else:
+                        print(f"[ThreatDetector] '{model_path}' not found. Initializing YOLO-World Zero-Shot Threat Engine.")
+                        model = YOLO("yolov8s-worldv2.pt")
+                        all_prompts = list(THREAT_CLASSES) + NEGATIVE_DISTRACTORS
+                        model.set_classes(all_prompts)
+                        status = "YOLO-WORLD ZERO-SHOT (THREAT ACTIVE)"
 
                 elif engine_name == "yolo11_tactical":
-                    # Custom YOLOv11 Medium Tactical Model (100 Epochs: Gun, Knife)
                     model_path = os.path.join(base_dir, "weights", "yolo11m_guns.pt")
-                    model = YOLO(model_path)
-                    self.model_status = "YOLOV11 TACTICAL ENGINE (GUNS & BLADES)"
+                    if os.path.exists(model_path):
+                        model = YOLO(model_path)
+                        status = "YOLOV11 TACTICAL ENGINE (GUNS & BLADES)"
+                    else:
+                        print(f"[ThreatDetector] '{model_path}' not found. Initializing YOLO-World Zero-Shot Threat Engine.")
+                        model = YOLO("yolov8s-worldv2.pt")
+                        all_prompts = list(THREAT_CLASSES) + NEGATIVE_DISTRACTORS
+                        model.set_classes(all_prompts)
+                        status = "YOLO-WORLD ZERO-SHOT (TACTICAL ACTIVE)"
 
                 elif engine_name == "extended":
-                    # Extended Armament Model (gun, rifle, heavy_weapon, knife)
                     model_path = os.path.join(base_dir, "izzy_model.pt")
-                    if not os.path.exists(model_path):
-                        model_path = "izzy_model.pt"
-                    model = YOLO(model_path)
-                    self.model_status = "EXTENDED ARMAMENT ENGINE"
+                    if os.path.exists(model_path):
+                        model = YOLO(model_path)
+                        status = "EXTENDED ARMAMENT ENGINE"
+                    else:
+                        print(f"[ThreatDetector] '{model_path}' not found. Initializing YOLO-World Zero-Shot Threat Engine.")
+                        model = YOLO("yolov8s-worldv2.pt")
+                        all_prompts = list(THREAT_CLASSES) + NEGATIVE_DISTRACTORS
+                        model.set_classes(all_prompts)
+                        status = "YOLO-WORLD ZERO-SHOT (EXTENDED ACTIVE)"
 
                 elif engine_name == "world":
-                    # Zero-shot YOLO-World with comprehensive negative distractor grounding
                     model = YOLO("yolov8s-worldv2.pt")
                     all_prompts = list(THREAT_CLASSES) + NEGATIVE_DISTRACTORS
                     model.set_classes(all_prompts)
-                    self.model_status = "YOLO-WORLD ZERO-SHOT (GROUNDED)"
+                    status = "YOLO-WORLD ZERO-SHOT (GROUNDED)"
 
                 else:  # 'legacy'
-                    # Legacy Capstone Model (Dual-Class Nano)
                     model_path = os.path.join(base_dir, "weapon_model.pt")
-                    model = YOLO(model_path)
-                    self.model_status = "LEGACY CAPSTONE MODEL (NANO)"
+                    if os.path.exists(model_path):
+                        model = YOLO(model_path)
+                        status = "LEGACY CAPSTONE MODEL (NANO)"
+                    else:
+                        print(f"[ThreatDetector] '{model_path}' not found. Initializing YOLO-World Zero-Shot Threat Engine.")
+                        model = YOLO("yolov8s-worldv2.pt")
+                        all_prompts = list(THREAT_CLASSES) + NEGATIVE_DISTRACTORS
+                        model.set_classes(all_prompts)
+                        status = "YOLO-WORLD ZERO-SHOT (LEGACY ACTIVE)"
 
                 with self.lock:
                     self.model = model
+                    self.model_status = status
                     self.selected_engine = engine_name
                     self.detection_history.clear()
                 print(f"[ThreatDetector] Engine active: {self.model_status}")
             except Exception as e:
                 print(f"[ThreatDetector] Error loading engine {engine_name}: {e}")
-                self.model_status = "ONLINE (FALLBACK)"
+                try:
+                    print("[ThreatDetector] Loading fallback YOLO-World engine...")
+                    fallback_model = YOLO("yolov8s-worldv2.pt")
+                    all_prompts = list(THREAT_CLASSES) + NEGATIVE_DISTRACTORS
+                    fallback_model.set_classes(all_prompts)
+                    with self.lock:
+                        self.model = fallback_model
+                        self.model_status = "YOLO-WORLD ZERO-SHOT (FALLBACK)"
+                        self.selected_engine = engine_name
+                except Exception as e2:
+                    print(f"[ThreatDetector] Fallback failed: {e2}")
+                    self.model_status = "OFFLINE"
 
         t = threading.Thread(target=load, daemon=True)
         t.start()
@@ -394,7 +449,7 @@ class ThreatDetector:
                             coco_res = self.distractor_model.predict(
                                 frame,
                                 classes=[43],  # Class 43 is COCO 'knife'
-                                conf=max(0.30, float(self.conf_threshold)),
+                                conf=float(self.conf_threshold),
                                 imgsz=320,
                                 verbose=False
                             )
