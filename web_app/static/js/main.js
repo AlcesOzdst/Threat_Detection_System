@@ -201,9 +201,21 @@ document.addEventListener('DOMContentLoaded', () => {
                     const dedupeKey = `${t.label}_${Math.floor(Date.now() / 2000)}`;
                     if (!loggedDetections.has(dedupeKey)) {
                         loggedDetections.add(dedupeKey);
-                        addLogEntry(t);
+                        addLogEntry(t, dedupeKey);
                     }
                 });
+
+                // Periodically prune stale deduplication keys older than 60 seconds
+                const currentWindow = Math.floor(Date.now() / 2000);
+                for (const key of loggedDetections) {
+                    const lastUnderscore = key.lastIndexOf('_');
+                    if (lastUnderscore !== -1) {
+                        const win = parseInt(key.substring(lastUnderscore + 1), 10);
+                        if (!isNaN(win) && currentWindow - win > 30) {
+                            loggedDetections.delete(key);
+                        }
+                    }
+                }
             } else {
                 globalStatusBadge.textContent = 'MONITORING';
                 globalStatusBadge.className = 'status-indicator-badge status-idle';
@@ -224,7 +236,7 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     // Helper: Add Incident Log Entry
-    function addLogEntry(threat) {
+    function addLogEntry(threat, dedupeKey) {
         const emptyRow = logBody.querySelector('.empty-row');
         if (emptyRow) {
             emptyRow.remove();
@@ -241,6 +253,9 @@ document.addEventListener('DOMContentLoaded', () => {
         const levelText = isCritical ? 'CRITICAL' : 'ELEVATED';
 
         const tr = document.createElement('tr');
+        if (dedupeKey) {
+            tr.dataset.dedupeKey = dedupeKey;
+        }
         tr.innerHTML = `
             <td>${timeStr}</td>
             <td><strong>${threat.label.toUpperCase()}</strong></td>
@@ -250,9 +265,13 @@ document.addEventListener('DOMContentLoaded', () => {
 
         logBody.insertBefore(tr, logBody.firstChild);
 
-        // Limit log entries to 30
+        // Limit log entries to 30 in UI and prune backing collection
         while (logBody.children.length > 30) {
-            logBody.removeChild(logBody.lastChild);
+            const removed = logBody.lastChild;
+            if (removed && removed.dataset && removed.dataset.dedupeKey) {
+                loggedDetections.delete(removed.dataset.dedupeKey);
+            }
+            logBody.removeChild(removed);
         }
     }
 
@@ -260,7 +279,6 @@ document.addEventListener('DOMContentLoaded', () => {
     function addEvidenceSnapshot(snapshot) {
         if (!snapshot || !snapshot.url) return;
         evidenceSnapshots.unshift(snapshot);
-        evidenceCount.textContent = `${evidenceSnapshots.length} ITEMS`;
 
         const empty = evidenceGrid.querySelector('.evidence-empty');
         if (empty) empty.remove();
@@ -277,10 +295,15 @@ document.addEventListener('DOMContentLoaded', () => {
 
         evidenceGrid.insertBefore(item, evidenceGrid.firstChild);
 
-        // Limit to 10 snapshots in UI
+        // Limit to 10 snapshots in UI and prune backing collection
         while (evidenceGrid.children.length > 10) {
             evidenceGrid.removeChild(evidenceGrid.lastChild);
+            evidenceSnapshots.pop();
         }
+        while (evidenceSnapshots.length > 10) {
+            evidenceSnapshots.pop();
+        }
+        evidenceCount.textContent = `${evidenceSnapshots.length} ITEMS`;
     }
 
     // Start Polling
