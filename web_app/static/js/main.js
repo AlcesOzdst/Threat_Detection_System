@@ -45,13 +45,20 @@ document.addEventListener('DOMContentLoaded', () => {
     // 2. Audio Alert Toggle
     toggleAudioBtn.addEventListener('click', () => {
         audioEnabled = !audioEnabled;
+        toggleAudioBtn.replaceChildren();
+        const iconSpan = document.createElement('span');
+        iconSpan.className = 'btn-icon';
         if (audioEnabled) {
-            toggleAudioBtn.innerHTML = '<span class="btn-icon">🔊</span> ALARM: ON';
+            iconSpan.textContent = '🔊';
+            toggleAudioBtn.appendChild(iconSpan);
+            toggleAudioBtn.appendChild(document.createTextNode(' ALARM: ON'));
             toggleAudioBtn.classList.add('btn-primary');
             toggleAudioBtn.classList.remove('btn-secondary');
             alertAudio.play().then(() => alertAudio.pause()).catch(() => {});
         } else {
-            toggleAudioBtn.innerHTML = '<span class="btn-icon">🔇</span> ALARM: OFF';
+            iconSpan.textContent = '🔇';
+            toggleAudioBtn.appendChild(iconSpan);
+            toggleAudioBtn.appendChild(document.createTextNode(' ALARM: OFF'));
             toggleAudioBtn.classList.remove('btn-primary');
             toggleAudioBtn.classList.add('btn-secondary');
         }
@@ -79,43 +86,55 @@ document.addEventListener('DOMContentLoaded', () => {
 
     function updateClassTags(engine) {
         if (!classTagsContainer) return;
+        classTagsContainer.replaceChildren();
+        let tags = [];
         if (engine === 'sota_threat' || engine === 'specialized') {
-            classTagsContainer.innerHTML = `
-                <span class="tag">Gun / Pistol</span>
-                <span class="tag">Grenade / Bomb</span>
-                <span class="tag">Knife / Blade</span>
-                <span class="tag">Explosive</span>
-                <span class="tag" style="opacity:0.6">Immune: Scissors, Bare Arm, Tools</span>
-            `;
+            tags = [
+                { text: 'Gun / Pistol' },
+                { text: 'Grenade / Bomb' },
+                { text: 'Knife / Blade' },
+                { text: 'Explosive' },
+                { text: 'Immune: Scissors, Bare Arm, Tools', opacity: '0.6' }
+            ];
         } else if (engine === 'yolo11_tactical') {
-            classTagsContainer.innerHTML = `
-                <span class="tag">Gun / Firearm</span>
-                <span class="tag">Knife / Blade</span>
-                <span class="tag" style="opacity:0.6">YOLOv11 Tactical Medium</span>
-            `;
+            tags = [
+                { text: 'Gun / Firearm' },
+                { text: 'Knife / Blade' },
+                { text: 'YOLOv11 Tactical Medium', opacity: '0.6' }
+            ];
         } else if (engine === 'extended') {
-            classTagsContainer.innerHTML = `
-                <span class="tag">Gun / Pistol</span>
-                <span class="tag">Rifle / Firearm</span>
-                <span class="tag">Heavy Weapon</span>
-                <span class="tag">Knife / Blade</span>
-            `;
+            tags = [
+                { text: 'Gun / Pistol' },
+                { text: 'Rifle / Firearm' },
+                { text: 'Heavy Weapon' },
+                { text: 'Knife / Blade' }
+            ];
         } else if (engine === 'legacy') {
-            classTagsContainer.innerHTML = `
-                <span class="tag">Pistol / Handgun</span>
-                <span class="tag">Combat Knife</span>
-                <span class="tag" style="opacity:0.6">Legacy Dual-Class Model</span>
-            `;
+            tags = [
+                { text: 'Pistol / Handgun' },
+                { text: 'Combat Knife' },
+                { text: 'Legacy Dual-Class Model', opacity: '0.6' }
+            ];
         } else {
-            classTagsContainer.innerHTML = `
-                <span class="tag">Handgun / Pistol</span>
-                <span class="tag">Rifle / Firearm</span>
-                <span class="tag">Knife / Blade</span>
-                <span class="tag">Bomb / Explosive</span>
-                <span class="tag">Grenade</span>
-                <span class="tag" style="opacity:0.6">Grounded: Scissors, Tools, Arm</span>
-            `;
+            tags = [
+                { text: 'Handgun / Pistol' },
+                { text: 'Rifle / Firearm' },
+                { text: 'Knife / Blade' },
+                { text: 'Bomb / Explosive' },
+                { text: 'Grenade' },
+                { text: 'Grounded: Scissors, Tools, Arm', opacity: '0.6' }
+            ];
         }
+
+        tags.forEach(t => {
+            const span = document.createElement('span');
+            span.className = 'tag';
+            span.textContent = t.text;
+            if (t.opacity) {
+                span.style.opacity = t.opacity;
+            }
+            classTagsContainer.appendChild(span);
+        });
     }
 
     // 5. Restart Feed Button
@@ -149,7 +168,14 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // 7. Clear Log
     clearLogBtn.addEventListener('click', () => {
-        logBody.innerHTML = '<tr class="empty-row"><td colspan="4">No security incidents detected.</td></tr>';
+        logBody.replaceChildren();
+        const emptyTr = document.createElement('tr');
+        emptyTr.className = 'empty-row';
+        const emptyTd = document.createElement('td');
+        emptyTd.colSpan = 4;
+        emptyTd.textContent = 'No security incidents detected.';
+        emptyTr.appendChild(emptyTd);
+        logBody.appendChild(emptyTr);
         loggedDetections.clear();
     });
 
@@ -256,12 +282,29 @@ document.addEventListener('DOMContentLoaded', () => {
         if (dedupeKey) {
             tr.dataset.dedupeKey = dedupeKey;
         }
-        tr.innerHTML = `
-            <td>${timeStr}</td>
-            <td><strong>${threat.label.toUpperCase()}</strong></td>
-            <td>${(threat.confidence * 100).toFixed(0)}%</td>
-            <td><span class="threat-badge ${badgeClass}">${levelText}</span></td>
-        `;
+
+        const tdTime = document.createElement('td');
+        tdTime.textContent = timeStr;
+
+        const tdLabel = document.createElement('td');
+        const strongLabel = document.createElement('strong');
+        strongLabel.textContent = (threat.label || '').toUpperCase();
+        tdLabel.appendChild(strongLabel);
+
+        const tdConf = document.createElement('td');
+        const confNum = Number(threat.confidence) || 0;
+        tdConf.textContent = `${(confNum * 100).toFixed(0)}%`;
+
+        const tdBadge = document.createElement('td');
+        const badgeSpan = document.createElement('span');
+        badgeSpan.className = `threat-badge ${badgeClass}`;
+        badgeSpan.textContent = levelText;
+        tdBadge.appendChild(badgeSpan);
+
+        tr.appendChild(tdTime);
+        tr.appendChild(tdLabel);
+        tr.appendChild(tdConf);
+        tr.appendChild(tdBadge);
 
         logBody.insertBefore(tr, logBody.firstChild);
 
@@ -285,10 +328,18 @@ document.addEventListener('DOMContentLoaded', () => {
 
         const item = document.createElement('div');
         item.className = 'evidence-item';
-        item.innerHTML = `
-            <img src="${snapshot.url}" alt="Threat evidence">
-            <div class="evidence-caption">${snapshot.timestamp} // ${snapshot.label || 'THREAT'}</div>
-        `;
+
+        const img = document.createElement('img');
+        img.src = snapshot.url;
+        img.alt = 'Threat evidence';
+
+        const caption = document.createElement('div');
+        caption.className = 'evidence-caption';
+        caption.textContent = `${snapshot.timestamp || ''} // ${snapshot.label || 'THREAT'}`;
+
+        item.appendChild(img);
+        item.appendChild(caption);
+
         item.addEventListener('click', () => {
             window.open(snapshot.url, '_blank');
         });
